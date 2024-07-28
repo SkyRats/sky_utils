@@ -354,56 +354,8 @@ class Mav:
         """
         Changes vehicle mode to guided, arms throttle and takes off
         """
-        velocity = 1
-        self.change_mode("4")
-        success = False
 
-        while not success:
-
-            if not self.drone_state.armed:
-                rospy.logwarn("Arming drone...")
-                fb = self.arm()
-
-                while not fb.success:
-
-                    fb = self.arm()
-                    self.rate.sleep()
-
-                rospy.loginfo("Drone armed \n")
-
-            else:
-                rospy.loginfo("Drone already armed \n")
-            
-            rospy.logwarn("Executing takeoff...")
-
-            # message = self.takeoff_serv(altitude = height)
-            # success = message.success
-            rospy.sleep(2)
-
-            if not success:
-                p = self.pose.position.z
-                time=0
-                while abs(self.pose.position.z - height) >= TOL and not rospy.is_shutdown():
-
-                    time += 1/60.0 #sec - init_time
-                    
-                    rospy.logwarn('Taking off at ' + str(velocity) + ' m/s')   
-                    
-                    if p < height:
-                        self.set_vel(0,0,1,0,0,0)
-                        # p = ((-2 * (velocity**3) * (time**3)) / height**2) + ((3*(time**2) * (velocity**2))/height)
-                        # self.goto(self.pose.position.x, self.pose.position.y, p)
-
-                    else:
-                        self.goto(self.pose.position.x, self.pose.position.y, height)
-            success = True
-                
-            # success = self.takeoff_serv(altitude = height)
-
-
-        # return True
-
-        # return self.change_mode("4") and self.arm() and self.takeoff_serv(latitude = 0.0, longitude = 0.0, altitude = height)
+        return self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
 
     def change_mode(self, mode : str) -> bool:
         """
