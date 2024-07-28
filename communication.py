@@ -1,24 +1,69 @@
 import rospy
 import tf
+from pymavlink import mavutil
 from geometry_msgs.msg import Pose, PoseStamped, Twist, Quaternion
 from mavros_msgs.srv import SetMode
 from mavros_msgs.srv import CommandTOL, CommandBool
+from mavros_msgs.msg import State
 import math
+import argparse
+from dronekit import connect, VehicleMode
 import numpy as np
-
+import time
 import tf.transformations
 PI = np.pi
 HALF_PI = PI/2.0
+TOL = 0.5
+
+DRONEKIT = False
 
 class Mav:
     """
     Interface with mavros
     """
 
-    def __init__(self, debug : bool = False) -> None:
+    def __init__(self, debug : bool = False, use_dk : bool = False) -> None:
         
         #INITIALIZING NODE
         rospy.init_node("mav")
+
+        #USE DRONEKIT if REQUESTED
+
+        if use_dk:
+            parser = argparse.ArgumentParser()
+
+            parser.add_argument('--connect', default='udp:127.0.0.1:14551')
+
+
+            args = parser.parse_args()
+
+            #-- Connect to the vehicle
+            print('Connecting...')
+            self.vehicle = connect(args.connect)
+
+            #-- Check vehicle status
+            print(f"Mode: {self.vehicle.mode.name}")
+            print(" Global Location: %s" % self.vehicle.location.global_frame)
+            print(" Global Location (relative altitude): %s" % self.vehicle.location.global_relative_frame)
+            print(" Local Location: %s" % self.vehicle.location.local_frame)
+            print(" Attitude: %s" % self.vehicle.attitude)
+            print(" Velocity: %s" % self.vehicle.velocity)
+            print(" Gimbal status: %s" % self.vehicle.gimbal)
+            print(" EKF OK?: %s" % self.vehicle.ekf_ok)
+            print(" Last Heartbeat: %s" % self.vehicle.last_heartbeat)
+            print(" Rangefinder: %s" % self.vehicle.rangefinder)
+            print(" Rangefinder distance: %s" % self.vehicle.rangefinder.distance)
+            print(" Rangefinder voltage: %s" % self.vehicle.rangefinder.voltage)
+            print(" Is Armable?: %s" % self.vehicle.is_armable)
+            print(" System status: %s" % self.vehicle.system_status.state)
+            print(" Armed: %s" % self.vehicle.armed)    # settable
+
+            # Ensure the vehicle is in GUIDED mode
+            if self.vehicle.mode != 'GUIDED':
+                self.vehicle.mode = VehicleMode('GUIDED')
+                while self.vehicle.mode != 'GUIDED':
+                    time.sleep(1)
+                print('Vehicle in GUIDED mode')
 
         #SUBSCRIBERS
         rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback)
@@ -26,6 +71,7 @@ class Mav:
         #PUBLISHERS
         self.pos_pub = rospy.Publisher("/mavros/setpoint_position/local", PoseStamped, queue_size=1)
         self.vel_pub = rospy.Publisher("/mavros/setpoint_velocity/cmd_vel_unstamped", Twist, queue_size=1)
+        
 
         #SERVICES
         self.mode_serv = rospy.ServiceProxy('/mavros/set_mode', SetMode)
@@ -34,9 +80,14 @@ class Mav:
 
         #ATTRIBUTES
         self.pose = Pose()
+        self.rate = rospy.Rate(60)
         self.goal_pose = Pose()
         self.debug = debug
         self.mode = int()
+        self.prev_vy = 0
+        self.prev_vx = 0
+        self.prev_vz = 0
+        self.drone_state = State()
 
     def pose_callback(self, msg : PoseStamped) -> None:
         """
@@ -60,6 +111,11 @@ class Mav:
 
         self.vel_pub.publish(twist)
 
+    def state_callback(self, state_data):
+
+        self.drone_state = state_data
+
+
     def publish_pose(self, pose : Pose) -> None:
         """
         Populates a PoseStamped object with pose and publishes it
@@ -68,6 +124,115 @@ class Mav:
         stamped.pose = pose
 
         self.pos_pub.publish(stamped)
+    
+    def move_drone_with_velocity_dk(self, vx, vy, vz, alpha):
+        """
+        Send SET_POSITION_TARGET_LOCAL_NED command to request the vehicle fly to a specified
+        location in the North, East, Down frame.
+        """
+        # Apply smoothing using a low-pass filter
+        smoothed_vx = alpha * vx + (1 - alpha) * self.prev_vx
+        smoothed_vz = alpha * vz + (1 - alpha) * self.prev_vz
+        smoothed_vy = alpha * vy + (1 - alpha) * self.prev_vy
+        
+        print("Velocities X and Y: ", smoothed_vx,smoothed_vz)
+
+        msg = self.vehicle.message_factory.set_position_target_local_ned_encode(
+            0,       # time_boot_ms (not used)
+            0, 0,    # target system, target component
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # frame
+            0b110111000111, # type_mask (only positions enabled)
+            0, 0, 0,
+            smoothed_vx, smoothed_vy, smoothed_vz, # x, y, z velocity in m/s
+            0, 0, 0, # x, y, z acceleration (not supported yet, ignored in GCS_Mavlink)
+            0, 0)    # yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
+        
+        # Send command to vehicle
+        self.vehicle.send_mavlink(msg)
+        self.vehicle.flush()
+
+        # Update previous velocities
+        self.prev_vx = smoothed_vx
+        self.prev_vz = smoothed_vz
+        self.prev_vy = smoothed_vy
+    
+    def stop_dk(self, vx : bool = True, vy : bool = True, vz : bool = True):
+
+        """
+        Stopes movement in any axis
+
+        """
+
+        if vx:
+            vx = 0
+        else:
+            vx = self.prev_vx
+        
+        if vy:
+            vy = 0
+        else:
+            vy = self.prev_vy
+        
+        if vz:
+            vz = 0
+
+        else: 
+            vz = self.prev_vz
+
+        msg = self.vehicle.message_factory.set_position_target_local_ned_encode(
+            0,       # time_boot_ms (not used)
+            0, 0,    # target system, target component
+            mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED, # frame
+            0b110111000111, # type_mask (only positions enabled)
+            0, 0, 0,
+            vx, vy, vz, # x, y, z velocity in m/s
+            0, 0, 0, # x, y, z acceleration (not supported yet, ignored in GCS_Mavlink)
+            0, 0)    # yaw, yaw_rate (not supported yet, ignored in GCS_Mavlink)
+        
+        # Send command to vehicle
+        self.vehicle.send_mavlink(msg)
+        self.vehicle.flush()
+    
+    def end_dk(self):
+
+        # END CONNECTION
+
+        self.vehicle.close()
+    
+
+    def takeoff_dk(self,aTargetAltitude):
+        """
+        Arms vehicle and fly to aTargetAltitude - using dronekit
+        """
+
+        print("Basic pre-arm checks")
+        # Don't try to arm until autopilot is ready
+        while not self.vehicle.is_armable:
+            print(" Waiting for vehicle to initialise...")
+            time.sleep(1)
+
+        print("Arming motors")
+        # Copter should arm in GUIDED mode
+        self.vehicle.mode    = VehicleMode("GUIDED")
+        self.vehicle.armed   = True
+
+        # Confirm vehicle armed before attempting to take off
+        while not self.vehicle.armed:
+            print(" Waiting for arming...")
+            time.sleep(1)
+
+        print("Taking off!")
+        self.vehicle.simple_takeoff(aTargetAltitude) # Take off to target altitude
+
+        # Wait until the vehicle reaches a safe height before processing the goto (otherwise the command
+        #  after Vehicle.simple_takeoff will execute immediately).
+        while True:
+            print(" Altitude: ", self.vehicle.location.global_relative_frame.alt)
+            #Break and return from function just below target altitude.
+            if self.vehicle.location.global_relative_frame.alt>=aTargetAltitude*0.95:
+                print("Reached target altitude")
+                break
+            time.sleep(1)
 
     def goto(self, x=None, y=None, z= None, yaw=None) -> None:
         """
@@ -189,8 +354,56 @@ class Mav:
         """
         Changes vehicle mode to guided, arms throttle and takes off
         """
+        velocity = 1
+        self.change_mode("4")
+        success = False
 
-        return self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
+        while not success:
+
+            if not self.drone_state.armed:
+                rospy.logwarn("Arming drone...")
+                fb = self.arm()
+
+                while not fb.success:
+
+                    fb = self.arm()
+                    self.rate.sleep()
+
+                rospy.loginfo("Drone armed \n")
+
+            else:
+                rospy.loginfo("Drone already armed \n")
+            
+            rospy.logwarn("Executing takeoff...")
+
+            # message = self.takeoff_serv(altitude = height)
+            # success = message.success
+            rospy.sleep(2)
+
+            if not success:
+                p = self.pose.position.z
+                time=0
+                while abs(self.pose.position.z - height) >= TOL and not rospy.is_shutdown():
+
+                    time += 1/60.0 #sec - init_time
+                    
+                    rospy.logwarn('Taking off at ' + str(velocity) + ' m/s')   
+                    
+                    if p < height:
+                        self.set_vel(0,0,1,0,0,0)
+                        # p = ((-2 * (velocity**3) * (time**3)) / height**2) + ((3*(time**2) * (velocity**2))/height)
+                        # self.goto(self.pose.position.x, self.pose.position.y, p)
+
+                    else:
+                        self.goto(self.pose.position.x, self.pose.position.y, height)
+            success = True
+                
+            # success = self.takeoff_serv(altitude = height)
+
+
+        # return True
+
+        # return self.change_mode("4") and self.arm() and self.takeoff_serv(latitude = 0.0, longitude = 0.0, altitude = height)
 
     def change_mode(self, mode : str) -> bool:
         """
