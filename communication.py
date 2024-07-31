@@ -5,6 +5,7 @@ from mavros_msgs.srv import SetMode
 from mavros_msgs.srv import CommandTOL, CommandBool
 import math
 import numpy as np
+from time import time
 
 import tf.transformations
 PI = np.pi
@@ -207,6 +208,36 @@ class Mav:
         """
         return self.change_mode("9") and self.disarm()
     
+class PID:
+    """
+    Simple implementation of a PID controller. (if you're centralizing, you'll be using two of this!)
+    """
+    def __init__(self, Kp : float, Ki : float, Kd : float) -> None:
+        self.start_time = None
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.last_error = 0
+        self.last_integral = 0
+
+    def refresh(self) -> None:
+        self.last_error = 0
+        self.last_integral = 0
+        self.start_time = None
+
+    def start_iteration(self) -> None:
+        self.start_iteration = time()
+
+    def update(self, error : float) -> float:
+        dt = time() - self.start_time
+        integral = self.last_integral + error * dt
+        derivative = (error - self.last_error)/dt
+        
+        result = self.Kp * error + self.Ki * integral + self.Kd * derivative
+
+        self.last_error = error
+        self.last_integral = integral
+        return result
 
 def test():
     mav = Mav(debug=True)
