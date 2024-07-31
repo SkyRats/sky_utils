@@ -221,14 +221,23 @@ class PID:
         self.last_integral = 0
 
     def refresh(self) -> None:
+        """
+        Refreshes the PID, reseting last error, integral and nulifying iteration start time
+        """
         self.last_error = 0
         self.last_integral = 0
         self.start_time = None
 
     def start_iteration(self) -> None:
+        """
+        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
+        """
         self.start_iteration = time()
 
     def update(self, error : float) -> float:
+        """
+        Updates the PID controller with an error and considering a delta time since the start of the iteration
+        """
         dt = time() - self.start_time
         integral = self.last_integral + error * dt
         derivative = (error - self.last_error)/dt
