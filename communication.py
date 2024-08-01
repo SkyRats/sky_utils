@@ -208,6 +208,37 @@ class Mav:
         """
         return self.change_mode("9") and self.disarm()
     
+class TwoAxisPID:
+    """
+    Simply put, this is a PID in two axis. Used in centralizing tasks.
+    """
+
+    def __init__(self, Kp_x : float, Ki_x : float, Kd_x : float, Kp_y : float, Ki_y : float, Kd_y : float) -> None:
+        self.pid_x = PID(Kp_x, Ki_x, Kd_x)
+        self.pid_y = PID(Kp_y, Ki_y, Kd_y)
+
+    def refresh(self):
+        """
+        Refreshes the PID, reseting last error, integral and nulifying iteration start time in both axis
+        """
+        self.pid_x.refresh()
+        self.pid_y.refresh()
+        
+
+    def start_iteration(self) -> None:
+        """
+        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
+        """
+        start_time = time()
+        self.pid_x.start_time = start_time
+        self.pid_y.start_time = start_time
+        
+    def update(self, error_x, error_y : float) -> tuple:
+        """
+        Updates both PID controllers with an error considering a delta time since the start of the iteration
+        """
+        return (self.pid_x.update(error_x), self.pid_y.update(error_y))
+
 class PID:
     """
     Simple implementation of a PID controller. (if you're centralizing, you'll be using two of this!)
@@ -232,7 +263,8 @@ class PID:
         """
         Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
         """
-        self.start_iteration = time()
+        
+        self.start_time = time()
 
     def update(self, error : float) -> float:
         """
