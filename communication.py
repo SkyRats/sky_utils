@@ -32,7 +32,7 @@ class Mav:
         #USE DRONEKIT if REQUESTED
         if use_dk:
             parser = argparse.ArgumentParser()
-            parser.add_argument('--connect', default='udp:127.0.0.1:14560')
+            parser.add_argument('--connect', default='udp:127.0.0.1:14551')
             dk_args, unknown = parser.parse_known_args()  # Parse only known args for DroneKit
 
             # Connect to the vehicle
