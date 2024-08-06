@@ -22,24 +22,22 @@ class Mav:
     Interface with mavros
     """
 
-    def __init__(self, debug : bool = False, use_dk : bool = False) -> None:
+    def __init__(self, debug : bool = False, use_dk : bool = False, simulation : bool = False) -> None:
         
         #INITIALIZING NODE
         rospy.init_node("mav")
 
-        #USE DRONEKIT if REQUESTED
+        self.simulation = simulation
 
+        #USE DRONEKIT if REQUESTED
         if use_dk:
             parser = argparse.ArgumentParser()
+            parser.add_argument('--connect', default='udp:127.0.0.1:14560')
+            dk_args, unknown = parser.parse_known_args()  # Parse only known args for DroneKit
 
-            parser.add_argument('--connect', default='udp:127.0.0.1:14551')
-
-
-            args = parser.parse_args()
-
-            #-- Connect to the vehicle
+            # Connect to the vehicle
             print('Connecting...')
-            self.vehicle = connect(args.connect)
+            self.vehicle = connect(dk_args.connect)
 
             #-- Check vehicle status
             print(f"Mode: {self.vehicle.mode.name}")
@@ -205,11 +203,13 @@ class Mav:
         Arms vehicle and fly to aTargetAltitude - using dronekit
         """
 
-        print("Basic pre-arm checks")
-        # Don't try to arm until autopilot is ready
-        while not self.vehicle.is_armable:
-            print(" Waiting for vehicle to initialise...")
-            time.sleep(1)
+        if self.simulation:
+
+            print("Basic pre-arm checks")
+            # Don't try to arm until autopilot is ready
+            while not self.vehicle.is_armable:
+                print(" Waiting for vehicle to initialise...")
+                time.sleep(1)
 
         print("Arming motors")
         # Copter should arm in GUIDED mode
@@ -222,7 +222,13 @@ class Mav:
             time.sleep(1)
 
         print("Taking off!")
-        self.vehicle.simple_takeoff(aTargetAltitude) # Take off to target altitude
+
+        if not self.simulation:
+            aTargetAltitude = aTargetAltitude + 0.3
+            self.vehicle.simple_takeoff(aTargetAltitude) # Take off to target altitude + 0.3 (lidar offset)
+        else:
+            self.vehicle.simple_takeoff(aTargetAltitude)
+        
 
         # Wait until the vehicle reaches a safe height before processing the goto (otherwise the command
         #  after Vehicle.simple_takeoff will execute immediately).
@@ -286,6 +292,8 @@ class Mav:
 
         if self.debug:
             rospy.loginfo(f"[WAIT_POSITION] Arrived at {self.pose}. Unlocking process")
+        
+        return True
 
     def distance_to_goal(self) -> float:
         """
@@ -297,39 +305,55 @@ class Mav:
 
         return math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
     
-    def wait_angle(self, min_angle : float, wait_time : float =0.3):
+    def wait_angle(self, min_angle: float, wait_time: float = 0.3):
         """
         Locks code execution while not close enough to goal_angle
         """
         if self.debug:
-            rospy.loginfo(f"[WAIT_ANGLE] Checking current and goal position and locking process until at least {min_angle} meters close")
+            rospy.loginfo(f"[WAIT_ANGLE] Checking current and goal position and locking process until at least {min_angle} radians close")
 
         angle = self.angle_to_goal()
-        
-        while(angle > min_angle):
 
+        while angle > min_angle:
             if self.debug:
-                rospy.loginfo("[WAIT_ANGLE] Still haven't turned to angle. Current angle is {angle} meters. Waiting for {wait_time} seconds")
-
+                rospy.loginfo(f"[WAIT_ANGLE] Still haven't turned to angle. Current angle difference is {angle}. Waiting for {wait_time} seconds")
+            
             rospy.sleep(wait_time)
-
             angle = self.angle_to_goal()
 
         if self.debug:
-            rospy.loginfo(f"[WAIT_ANGLE] Arrived at {self.pose.orientation}. Unlocking process")
+            rospy.loginfo(f"[WAIT_ANGLE] Arrived at angle difference {angle}. Unlocking process")
+        
         
     def angle_to_goal(self) -> float:
         """
         Calculates the difference between goal yaw and current yaw
         """
-        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
-                                                            self.pose.orientation.z, self.pose.orientation.w])[2]
+        current_orientation = [
+            self.pose.orientation.x,
+            self.pose.orientation.y,
+            self.pose.orientation.z,
+            self.pose.orientation.w
+        ]
 
-        yaw_goal = tf.transformations.euler_from_quaternion([self.goal_pose.orientation.x, self.goal_pose.orientation.y, 
-                                                            self.goal_pose.orientation.z, self.goal_pose.orientation.w])[2]
+        goal_orientation = [
+            self.goal_pose.orientation.x,
+            self.goal_pose.orientation.y,
+            self.goal_pose.orientation.z,
+            self.goal_pose.orientation.w
+        ]
+
+        yaw_current = tf.transformations.euler_from_quaternion(current_orientation)[2]
+        yaw_goal = tf.transformations.euler_from_quaternion(goal_orientation)[2]
+
+        angle_difference = abs(yaw_goal - yaw_current)
         
-        return yaw_goal - yaw_current
+        # Normalize the angle to the range [0, π]
+        if angle_difference > math.pi:
+            angle_difference = 2 * math.pi - angle_difference
 
+        return angle_difference
+    
     def rotate(self, yaw : float) -> None:
         """
         Rotates vehicles yaw. The same as a goto but keeping the current position
@@ -371,6 +395,78 @@ class Mav:
         Sets mode to land and disarms drone.
         """
         return self.change_mode("9") and self.disarm()
+
+class TwoAxisPID:
+    """
+    Simply put, this is a PID in two axis. Used in centralizing tasks.
+    """
+
+    def __init__(self, Kp_x : float, Ki_x : float, Kd_x : float, Kp_y : float, Ki_y : float, Kd_y : float) -> None:
+        self.pid_x = PID(Kp_x, Ki_x, Kd_x)
+        self.pid_y = PID(Kp_y, Ki_y, Kd_y)
+
+    def refresh(self):
+        """
+        Refreshes the PID, reseting last error, integral and nulifying iteration start time in both axis
+        """
+        self.pid_x.refresh()
+        self.pid_y.refresh()
+        
+
+    def start_iteration(self) -> None:
+        """
+        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
+        """
+        start_time = time()
+        self.pid_x.start_time = start_time
+        self.pid_y.start_time = start_time
+        
+    def update(self, error_x, error_y : float) -> tuple:
+        """
+        Updates both PID controllers with an error considering a delta time since the start of the iteration
+        """
+        return (self.pid_x.update(error_x), self.pid_y.update(error_y))
+
+class PID:
+    """
+    Simple implementation of a PID controller. (if you're centralizing, you'll be using two of this!)
+    """
+    def __init__(self, Kp : float, Ki : float, Kd : float) -> None:
+        self.start_time = None
+        self.Kp = Kp
+        self.Ki = Ki
+        self.Kd = Kd
+        self.last_error = 0
+        self.last_integral = 0
+
+    def refresh(self) -> None:
+        """
+        Refreshes the PID, reseting last error, integral and nulifying iteration start time
+        """
+        self.last_error = 0
+        self.last_integral = 0
+        self.start_time = None
+
+    def start_iteration(self) -> None:
+        """
+        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
+        """
+        
+        self.start_time = time()
+
+    def update(self, error : float) -> float:
+        """
+        Updates the PID controller with an error and considering a delta time since the start of the iteration
+        """
+        dt = time() - self.start_time
+        integral = self.last_integral + error * dt
+        derivative = (error - self.last_error)/dt
+        
+        result = self.Kp * error + self.Ki * integral + self.Kd * derivative
+
+        self.last_error = error
+        self.last_integral = integral
+        return result
 
 class TwoAxisPID:
     """
