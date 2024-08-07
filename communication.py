@@ -327,7 +327,7 @@ class Mav:
         dy = self.goal_pose.position.y - self.pose.position.y
         dz = self.goal_pose.position.z - self.pose.position.z
 
-        return math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
+        return math.sqrt((dx * dx) + (dy * dy))
     
     def wait_angle(self, min_angle: float, wait_time: float = 0.3):
         """
