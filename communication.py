@@ -224,10 +224,11 @@ class Mav:
 
         print("Taking off!")
 
+        if not self.simulation:
+            aTargetAltitude = aTargetAltitude + 0.3
 
         self.vehicle.simple_takeoff(aTargetAltitude)
         
-
         # Wait until the vehicle reaches a safe height before processing the goto (otherwise the command
         #  after Vehicle.simple_takeoff will execute immediately).
         while True:
@@ -269,7 +270,7 @@ class Mav:
         initial_distance = self.distance_to_goal()
 
         # Define a proportional threshold (e.g., 10% of the initial distance)
-        proportional_threshold = initial_distance * 0.1
+        proportional_threshold = initial_distance * 0.9
 
         # Attempt to send the goto command up to max_attempts times
         for attempt in range(max_attempts):
