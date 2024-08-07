@@ -64,8 +64,10 @@ class Mav:
                 print('Vehicle in GUIDED mode')
 
         #SUBSCRIBERS
-        rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback,queue_size=1, buff_size=2**24)
-
+        if simulation:
+            rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback, queue_size=1, buff_size=2**24)
+        else:
+            rospy.Subscriber("/mavros/vision_pose/pose", PoseStamped, self.pose_callback, queue_size=1, buff_size=2**24)
         #PUBLISHERS
         self.pos_pub = rospy.Publisher("/mavros/setpoint_position/local", PoseStamped, queue_size=1)
         self.vel_pub = rospy.Publisher("/mavros/setpoint_velocity/cmd_vel_unstamped", Twist, queue_size=1)
