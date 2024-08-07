@@ -225,8 +225,7 @@ class Mav:
         print("Taking off!")
 
         if not self.simulation:
-            aTargetAltitude = aTargetAltitude + 0.3
-            self.vehicle.simple_takeoff(aTargetAltitude)
+            self.vehicle.simple_takeoff(aTargetAltitude+0.3)
         else:
             self.vehicle.simple_takeoff(aTargetAltitude)
         
