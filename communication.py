@@ -226,8 +226,9 @@ class Mav:
 
         if not self.simulation:
             aTargetAltitude = aTargetAltitude + 0.3
-
-        self.vehicle.simple_takeoff(aTargetAltitude)
+            self.vehicle.simple_takeoff(aTargetAltitude)
+        else:
+            self.vehicle.simple_takeoff(aTargetAltitude)
         
         # Wait until the vehicle reaches a safe height before processing the goto (otherwise the command
         #  after Vehicle.simple_takeoff will execute immediately).
