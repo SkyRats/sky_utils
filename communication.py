@@ -222,12 +222,7 @@ class Mav:
             time.sleep(1)
 
         print("Taking off!")
-
-        if not self.simulation:
-            aTargetAltitude = aTargetAltitude + 0.3
-            self.vehicle.simple_takeoff(aTargetAltitude) # Take off to target altitude + 0.3 (lidar offset)
-        else:
-            self.vehicle.simple_takeoff(aTargetAltitude)
+        self.vehicle.simple_takeoff(aTargetAltitude)
         
 
         # Wait until the vehicle reaches a safe height before processing the goto (otherwise the command
