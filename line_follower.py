@@ -1,209 +1,112 @@
-!/usr/bin/env python
+#!/usr/bin/env python3
+
 import rospy
-import cv2
 import numpy as np
-import time
-from geometry_msgs.msg import TwistStamped, Vector3, Point, PoseStamped
+import tf.transformations as tf
+from sensor_msgs.msg import Image
+from geometry_msgs.msg import Point, TwistStamped, Vector3, PoseStamped
+from std_msgs.msg import Float64, Bool, String
 from mavros_msgs.msg import PositionTarget
 
-from std_msgs.msg import Int16
-from sensor_msgs.msg import Image
-from cv_bridge import CvBridge, CvBridgeError
-
-import math
 
 
-class image_converter:
-
-    def __init__(self):
-        self.pub_vel = rospy.Publisher('/mavros/setpoint_velocity/cmd_vel', TwistStamped, queue_size=1)
-        self.pub_ang_vel = rospy.Publisher('/mavros/setpoint_attitude/cmd_vel', TwistStamped, queue_size=1)
-        self.pub_error = rospy.Publisher('error', Int16, queue_size=10)
-        self.pub_angle = rospy.Publisher('angle', Int16, queue_size=10)
-        self.bridge = CvBridge()
-        self.image_sub = rospy.Subscriber('/webcam_down/image_raw_down', Image, self.callback)
-
-        self.setpoint_pub_ = rospy.Publisher('mavros/setpoint_raw/local', PositionTarget, queue_size=10)
-
-        # rospy.Subscriber('mavros/local_position/pose', PoseStamped, self.dronePosCallback)
-
-
-        self.Kp = 0.112                 # Ku=0.14 T=6. PID: p=0.084,i=0.028,d=0.063. PD: p=0.112, d=0.084/1. P: p=0.07
-        self.Ki = 0
-        self.kd = 1
-        self.integral = 0
-        self.derivative = 0
-        self.last_error = 0
-        self.Kp_ang = 0.024             # Ku=0.04 T=2. PID: p=0.024,i=0.024,d=0.006. PD: p=0.032, d=0.008. P: p=0.02/0.01
-        self.Ki_ang = 0.024
-        self.kd_ang = 0.006
-        self.integral_ang = 0
-        self.derivative_ang = 0
-        self.last_ang = 0
-        self.was_line = 0
-        self.line_side = 0
-        self.line_back = 1
-        self.error = []
-        self.angle = []
-        self.fly_time = 0.0
-        self.start = 0.0
-        self.stop = 0.0
-        self.velocity = 0.2
-
-        self.drone_pos_ = Point()
-
-
-    def line_detect(self, cv_image):
-        #for FIRA world simulation
-        #lower_mask = np.array([0, 0, 0])
-        #upper_mask = np.array([180, 255, 80])
+class LineFollower:
+    def __init__(self, debug=False, desired_drone_position=0.0, desired_angle = 0.0, default_velocity=0.25) -> None:    
+        #attributes
+        self.debug = debug
+        self.y_error = Float64()
+        self.angle_error = Float64()
+        self.line_detected = Bool()
+        self.desired_drone_position = Float64()
+        self.desired_angle = Float64()
+        self.setpoint = PositionTarget()
+        self.velocity_setpoint = Vector3()
+        self.default_velocity = default_velocity
+        self.current_yaw = 0.0
         
-        # for white line
-        lower_mask = np.array([0, 0, 200])
-        upper_mask = np.array([180, 80, 255])
+        self.desired_drone_position.data = desired_drone_position
+        self.desired_angle.data = desired_angle 
+
+
+        # ROS node
+        rospy.init_node('line_follower')
+        if self.debug:
+            rospy.loginfo("Line follower node started")
         
-        mask = cv2.inRange(cv_image, lower_mask, upper_mask)
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.erode(mask, kernel, iterations=5)
-        mask = cv2.dilate(mask, kernel, iterations=9)
+        # Subscribers
+        rospy.Subscriber('/sky_vision/down_cam/line/pose', Point, self.line_pose_callback)
+        rospy.Subscriber('/drone/control_effort', Float64, self.drone_ajustment_callback)
+        rospy.Subscriber('/angle/control_effort', Float64, self.angle_ajustment_callback)
+        rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.drone_pose_callback)
 
-        cv2.imshow("mask", mask)
-        cv2.waitKey(1) & 0xFF
+        if self.debug:
+            rospy.loginfo("Subscribers initialized")
 
-        contours_blk, _ = cv2.findContours(mask.copy(), cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        contours_blk = list(contours_blk)
+        # Publishers
+        self.setpoint_drone_pub = rospy.Publisher('/drone/setpoint', Float64, queue_size=10)
+        self.current_drone_pub = rospy.Publisher('/drone/state', Float64, queue_size=10)
+        self.setpoint_angle_pub = rospy.Publisher('/angle/setpoint', Float64, queue_size=10)
+        self.current_angle_pub = rospy.Publisher('/angle/state', Float64, queue_size=10)
+        self.setpoint_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
+        self.type_pub = rospy.Publisher('/sky_vision/down_cam/type', String, queue_size=1)
 
-        if len(contours_blk) > 0:
-            contours_blk.sort(key=cv2.minAreaRect)
-            if cv2.contourArea(contours_blk[0]) > 3000:
+        if self.debug:
+            rospy.loginfo("Publishers initialized")
 
-                self.was_line = 1
-                blackbox = cv2.minAreaRect(contours_blk[0])
-                (x_min, y_min), (w_min, h_min), angle = blackbox
-                if angle < -45:
-                    angle = 90 + angle
-                if w_min < h_min and angle > 0:
-                    angle = (90 - angle) * -1
-                if w_min > h_min and angle < 0:
-                    angle = 90 + angle
+        rospy.spin()
 
-                angle += 90
+    def drone_pose_callback(self, msg) -> None:
+        _,_,self.current_yaw = tf.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
+        if self.debug:
+            rospy.logwarn(f"yaw: {self.current_yaw}")
+    
+    def line_pose_callback(self, msg) -> None:
+        self.drone_error = msg.x
+        self.angle_error = msg.y
+        self.line_detected = msg.z
+        if self.debug:
+            rospy.loginfo(f"Line detected: {self.line_detected}, Y error: {self.y_error}, Angle error: {self.angle_error}")
 
-                if angle > 90:
-                    angle = angle - 180
+        # send setpoint
+        self.setpoint_drone_pub.publish(self.desired_drone_position)
+        self.setpoint_angle_pub.publish(self.desired_angle)
 
-                setpoint = cv_image.shape[1] / 2
-                error = int(x_min - setpoint)
-                self.error.append(error)
-                self.angle.append(angle)
-                normal_error = float(error) / setpoint
+        # send current state
+        self.current_drone_pub.publish(self.drone_error)
+        self.current_angle_pub.publish(self.angle_error)
 
-                if error > 0:
-                    self.line_side = 1  # line in right
-                elif error <= 0:
-                    self.line_side = -1  # line in left
+    def drone_ajustment_callback(self, msg) -> None:
+        if self.debug:
+            rospy.loginfo("Drone ajustment callback")
+        self.velocity_setpoint.x = 0
+        self.velocity_setpoint.y = 0
+        self.velocity_setpoint.z = 0
 
-                self.integral = float(self.integral + normal_error)
-                self.derivative = normal_error - self.last_error
-                self.last_error = normal_error
+        self.setpoint.velocity = self.velocity_setpoint
 
+    
+    def angle_ajustment_callback(self, msg) -> None:
+        if self.debug:
+            rospy.loginfo("Angle ajustment callback")
+        self.setpoint.yaw =  (msg.data * np.pi / 180) - self.current_yaw if abs(msg.data) < 5 else 0 #angle in radians
+        #self.setpoint.yaw_rate = 0.0 # 0.5 rad/s
+    
+        self.publish_setpoint()
 
-                error_corr = -1 * (self.Kp * normal_error + self.Ki * self.integral + self.kd * self.derivative)  # PID controler
-                # print("error_corr:  ", error_corr, "\nP", normal_error * self.Kp, "\nI", self.integral* self.Ki, "\nD", self.kd * self.derivative)
+    def publish_setpoint(self) -> None:
+        self.setpoint.header.stamp = rospy.Time.now()
+        self.setpoint.header.frame_id = "base_footprint"
+        self.setpoint.type_mask = PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | (PositionTarget.IGNORE_YAW if not self.setpoint.yaw else 1) | PositionTarget.IGNORE_YAW_RATE
+        self.setpoint.coordinate_frame = PositionTarget.FRAME_BODY_NED
 
-                angle = int(angle) 
-                print ("angle: ", angle)
-
-                self.integral_ang = float(self.integral_ang + angle)
-                self.derivative_ang = angle - self.last_ang
-                self.last_ang = angle
-
-                ang_corr = -1 * (self.Kp_ang * angle + self.Ki_ang * self.integral_ang + self.kd_ang * self.derivative_ang)  # PID controler
-
-                box = cv2.boxPoints(blackbox)
-                box = np.intp(box)
-
-                cv2.drawContours(cv_image, [box], 0, (0, 0, 255), 3)
-
-                cv2.putText(cv_image, "Angle: " + str(angle), (10, 40), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2,
-                            cv2.LINE_AA)
-
-                cv2.putText(cv_image, "Error: " + str(error), (10, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2,
-                            cv2.LINE_AA)
-                cv2.line(cv_image, (int(x_min), 200), (int(x_min), 250), (255, 0, 0), 3)
-
-
-                setpoint_ = PositionTarget()
-                vel_setpoint_ = Vector3()
-
-                vel_setpoint_.x = self.velocity
-                vel_setpoint_.y = error_corr
-
-                yaw_setpoint_ = ang_corr * math.pi / 180 * 5
-
-                #print(f"x: {vel_setpoint_.x} | y: {vel_setpoint_.y} | yaw: {yaw_setpoint_}")
-
-                setpoint_.coordinate_frame = PositionTarget.FRAME_BODY_NED
-                
-                setpoint_.velocity.x = vel_setpoint_.x
-                setpoint_.velocity.y = vel_setpoint_.y
-                setpoint_.velocity.z = 0
-
-                setpoint_.yaw = yaw_setpoint_
-
-                self.setpoint_pub_.publish(setpoint_)
-
-                ang = Int16()
-                ang.data = angle
-                self.pub_angle.publish(ang)
-
-                err = Int16()
-                err.data = error
-                self.pub_error.publish(err)
-              
-    # Zoom-in the image
-    def zoom(self, cv_image, scale):
-        height, width, _ = cv_image.shape
-        # print(width, 'x', height)
-        # prepare the crop
-        centerX, centerY = int(height / 2), int(width / 2)
-        radiusX, radiusY = int(scale * height / 100), int(scale * width / 100)
-
-        minX, maxX = centerX - radiusX, centerX + radiusX
-        minY, maxY = centerY - radiusY, centerY + radiusY
-
-        cv_image = cv_image[minX:maxX, minY:maxY]
-        cv_image = cv2.resize(cv_image, (width, height))
-
-        return cv_image
-
-
-    # Image processing @ 10 FPS
-    def callback(self, data):
-        try:
-            cv_image = self.bridge.imgmsg_to_cv2(data, "bgr8")
-        except CvBridgeError as e:
-            print(e)
-
-        cv_image = self.zoom(cv_image, scale=20)
-        cv_image = cv2.add(cv_image, np.array([-50.0]))
-  
-        cv_image_hsv = cv2.cvtColor(cv_image, cv2.COLOR_BGR2HSV)
-        self.line_detect(cv_image_hsv)
-
-        cv2.imshow("Image window", cv_image)
-        cv2.waitKey(1) & 0xFF
-
+        if self.debug:
+            rospy.loginfo("Publishing setpoint")
+            rospy.loginfo(f"velocity: x: {self.setpoint.velocity.x}, y ={self.setpoint.velocity.y} | yaw: {self.setpoint.yaw * 180 / np.pi} degrees")
+        self.setpoint_pub.publish(self.setpoint)
 
 def main():
-    rospy.init_node('image_converter', anonymous=True)
-    ic = image_converter()
-    time.sleep(3)
-    try:
-        rospy.spin()
-    except KeyboardInterrupt:
-        print("Shutting down")
-        cv2.destroyAllWindows()
+    LineFollower(debug=True)
+
 
 if __name__ == '__main__':
     main()
