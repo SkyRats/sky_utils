@@ -1,8 +1,9 @@
 import rospy
 import tf
-from geometry_msgs.msg import Pose, PoseStamped, Twist, Quaternion
-from mavros_msgs.srv import SetMode
-from mavros_msgs.srv import CommandTOL, CommandBool
+from geometry_msgs.msg import Pose, Point, PoseStamped, Twist 
+from mavros_msgs.srv import SetMode, CommandTOL, CommandBool
+from mavros_msgs.msg import PositionTarget 
+from simple_pid import PID
 import math
 import numpy as np
 from time import time
@@ -21,11 +22,14 @@ class Mav:
         #INITIALIZING NODE
         rospy.init_node("mav")
 
+        if debug: rospy.loginfo("started mav")
+
         #SUBSCRIBERS
         rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback)
 
         #PUBLISHERS
         self.pos_pub = rospy.Publisher("/mavros/setpoint_position/local", PoseStamped, queue_size=1)
+        self.angle_pub = rospy.Publisher("/mavros/setpoint_raw/local", PositionTarget, queue_size=1)
         self.vel_pub = rospy.Publisher("/mavros/setpoint_velocity/cmd_vel_unstamped", Twist, queue_size=1)
 
         #SERVICES
@@ -38,6 +42,8 @@ class Mav:
         self.goal_pose = Pose()
         self.debug = debug
         self.mode = int()
+
+        #rospy.spin()
 
     def pose_callback(self, msg : PoseStamped) -> None:
         """
@@ -166,13 +172,43 @@ class Mav:
         
         return yaw_goal - yaw_current
 
+    def rotate_control_yaw(self, yaw : float, yaw_rate: float = 0.5) -> None:
+        """
+        Rotates vehicles yaw. Its using setpoint raw
+        """
+        angle = PositionTarget()
+        angle.header.stamp = rospy.Time.now()
+        angle.header.frame_id = "base_footprint"
+
+        angle.yaw = yaw
+        angle.yaw_rate = yaw_rate
+
+        angle.coordinate_frame = PositionTarget.FRAME_BODY_NED
+        angle.position.x = self.pose.position.x
+        angle.position.y = self.pose.position.y
+        angle.position.z = self.pose.position.z
+        angle.type_mask = PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY | PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ
+        
+        self.angle_pub.publish(angle)
+
+        if self.debug: rospy.loginfo(f"[ROTATE] Rotating to {yaw} rad, with a rate of {yaw_rate} rad/2")
+
     def rotate(self, yaw : float) -> None:
         """
-        Rotates vehicles yaw. The same as a goto but keeping the current position
+        Rotates vehicles yaw. The same as goto but only changes yaw
+        """
+        self.goto(yaw=yaw)
+
+
+    def rotate_relative(self, yaw : float) -> None:
+        """
+        Rotates vehicles yaw in relative of its current position. Using the rotate method 
         """
 
-        self.goto(x=self.pose.position.x, y=self.pose.position.y, z=self.pose.position.z, yaw=yaw)
+        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
+                                                            self.pose.orientation.z, self.pose.orientation.w])[2]
 
+        self.rotate(yaw=yaw_current + yaw)
 
     def arm(self) -> bool:
         """
@@ -213,72 +249,15 @@ class TwoAxisPID:
     Simply put, this is a PID in two axis. Used in centralizing tasks.
     """
 
-    def __init__(self, Kp_x : float, Ki_x : float, Kd_x : float, Kp_y : float, Ki_y : float, Kd_y : float) -> None:
-        self.pid_x = PID(Kp_x, Ki_x, Kd_x)
-        self.pid_y = PID(Kp_y, Ki_y, Kd_y)
+    def __init__(self, Kp_x : float, Ki_x : float, Kd_x : float, Kp_y : float, Ki_y : float, Kd_y : float, setpoint_x: float, setpoint_y: float) -> None:
+        self.pid_x = PID(Kp_x, Ki_x, Kd_x, setpoint=setpoint_x)
+        self.pid_y = PID(Kp_y, Ki_y, Kd_y, setpoint = setpoint_y)
 
-    def refresh(self):
-        """
-        Refreshes the PID, reseting last error, integral and nulifying iteration start time in both axis
-        """
-        self.pid_x.refresh()
-        self.pid_y.refresh()
-        
-
-    def start_iteration(self) -> None:
-        """
-        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
-        """
-        start_time = time()
-        self.pid_x.start_time = start_time
-        self.pid_y.start_time = start_time
-        
-    def update(self, error_x, error_y : float) -> tuple:
+    def update(self, error_x: float, error_y : float) -> tuple:
         """
         Updates both PID controllers with an error considering a delta time since the start of the iteration
         """
-        return (self.pid_x.update(error_x), self.pid_y.update(error_y))
-
-class PID:
-    """
-    Simple implementation of a PID controller. (if you're centralizing, you'll be using two of this!)
-    """
-    def __init__(self, Kp : float, Ki : float, Kd : float) -> None:
-        self.start_time = None
-        self.Kp = Kp
-        self.Ki = Ki
-        self.Kd = Kd
-        self.last_error = 0
-        self.last_integral = 0
-
-    def refresh(self) -> None:
-        """
-        Refreshes the PID, reseting last error, integral and nulifying iteration start time
-        """
-        self.last_error = 0
-        self.last_integral = 0
-        self.start_time = None
-
-    def start_iteration(self) -> None:
-        """
-        Procedure used at the start of a loop to start counting time passed. Used in conjunction with the update function
-        """
-        
-        self.start_time = time()
-
-    def update(self, error : float) -> float:
-        """
-        Updates the PID controller with an error and considering a delta time since the start of the iteration
-        """
-        dt = time() - self.start_time
-        integral = self.last_integral + error * dt
-        derivative = (error - self.last_error)/dt
-        
-        result = self.Kp * error + self.Ki * integral + self.Kd * derivative
-
-        self.last_error = error
-        self.last_integral = integral
-        return result
+        return (self.pid_x(error_x), self.pid_y(error_y))
 
 def test():
     mav = Mav(debug=True)

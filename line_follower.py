@@ -48,17 +48,15 @@ class LineFollower:
         self.setpoint_angle_pub = rospy.Publisher('/angle/setpoint', Float64, queue_size=10)
         self.current_angle_pub = rospy.Publisher('/angle/state', Float64, queue_size=10)
         self.setpoint_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
-        self.type_pub = rospy.Publisher('/sky_vision/down_cam/type', String, queue_size=1)
+        self.type_pub = rospy.Publisher('/sky_vision/down_cam/type', String, queue_size=10)
 
         if self.debug:
             rospy.loginfo("Publishers initialized")
-
-        rospy.spin()
-
+        
     def drone_pose_callback(self, msg) -> None:
         _,_,self.current_yaw = tf.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
         if self.debug:
-            rospy.logwarn(f"yaw: {self.current_yaw}")
+            rospy.loginfo(f"yaw: {self.current_yaw}")
     
     def line_pose_callback(self, msg) -> None:
         self.drone_error = msg.x
@@ -78,8 +76,8 @@ class LineFollower:
     def drone_ajustment_callback(self, msg) -> None:
         if self.debug:
             rospy.loginfo("Drone ajustment callback")
-        self.velocity_setpoint.x = 0
-        self.velocity_setpoint.y = 0
+        self.velocity_setpoint.x = 0 
+        self.velocity_setpoint.y = 0 
         self.velocity_setpoint.z = 0
 
         self.setpoint.velocity = self.velocity_setpoint
@@ -87,26 +85,43 @@ class LineFollower:
     
     def angle_ajustment_callback(self, msg) -> None:
         if self.debug:
-            rospy.loginfo("Angle ajustment callback")
-        self.setpoint.yaw =  (msg.data * np.pi / 180) - self.current_yaw if abs(msg.data) < 5 else 0 #angle in radians
-        #self.setpoint.yaw_rate = 0.0 # 0.5 rad/s
-    
+            rospy.loginfo(f"Angle ajustment callback, angle: {msg.data}")
+
+        self.setpoint.yaw =  (-msg.data + self.current_yaw) #angle in radians
+
+        #rospy.loginfo(f"curr_yar:{self.current_yaw} | yaw:{self.setpoint.yaw} | msg.data:{msg.data}")
+
+        #if abs(msg.data ) > 0.002: 
         self.publish_setpoint()
 
     def publish_setpoint(self) -> None:
         self.setpoint.header.stamp = rospy.Time.now()
         self.setpoint.header.frame_id = "base_footprint"
-        self.setpoint.type_mask = PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | (PositionTarget.IGNORE_YAW if not self.setpoint.yaw else 1) | PositionTarget.IGNORE_YAW_RATE
+        self.setpoint.type_mask = PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_YAW_RATE
         self.setpoint.coordinate_frame = PositionTarget.FRAME_BODY_NED
 
         if self.debug:
-            rospy.loginfo("Publishing setpoint")
+            rospy.logwarn("Publishing setpoint")
             rospy.loginfo(f"velocity: x: {self.setpoint.velocity.x}, y ={self.setpoint.velocity.y} | yaw: {self.setpoint.yaw * 180 / np.pi} degrees")
-        self.setpoint_pub.publish(self.setpoint)
+        self.setpoint_pub.publish(self.setpoint) 
+
+    def start_following(self, val) -> None:
+        msg = String()
+        msg.data = "line" if val else " "   
+        self.type_pub.publish(msg) 
+        
 
 def main():
-    LineFollower(debug=True)
+    follower = LineFollower(debug=True)
+    rate = rospy.Rate(0.0001)
+    while not rospy.is_shutdown(): 
+        try:
+            follower.start_following(True)
+            rate.sleep()
+        except rospy.ROSInterruptException:
+            pass
 
+    #rospy.spin()
 
 if __name__ == '__main__':
     main()
