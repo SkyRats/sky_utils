@@ -17,10 +17,12 @@ class Mav:
     Interface with mavros
     """
 
-    def __init__(self, debug : bool = False) -> None:
+    def __init__(self, debug : bool = False, simulation: bool = False, lidar_min: float = 0.3) -> None:
         
         #INITIALIZING NODE
         rospy.init_node("mav")
+        self.simulation = simulation
+        self.lidar_min_distance = lidar_min
 
         if debug: rospy.loginfo("started mav")
 
@@ -50,6 +52,7 @@ class Mav:
         ROS callback used to get local position PoseStamped messages.
         """
         self.pose = msg.pose
+        if not self.simulation: self.pose.position.z += self.lidar_min_distance
 
     def set_vel(self, vel_x : float=0, vel_y : float=0, vel_z : float=0, ang_x : float=0, ang_y : float=0, ang_z : float=0) -> None:
         """
