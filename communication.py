@@ -79,58 +79,59 @@ class Mav:
 
         self.pos_pub.publish(stamped)
 
-    def goto(self, x=None, y=None, z= None, yaw=None) -> None:
+    def goto(self, x=None, y=None, z=None, yaw=None, max_attempts=5, timeout=6.0) -> bool:
         """
-        Sends a Pose message and publishes it as a setpoint (assuming vehicle is in guided mode). Yaw is offset by pi/2.
-        If movement in a specifit axis is not provided, assumes that you want to keep the vehicles current axial position.
-        Updates the self.goal_pose variable as well
+        Sends a Pose message and publishes it as a setpoint (assuming vehicle is in guided mode).
+        Yaw is offset by pi/2. If movement in a specific axis is not provided, assumes that you want
+        to keep the vehicle's current axial position. Updates the self.goal_pose variable as well.
+        Retries sending the command if the drone doesn't move within the specified timeout.
         """
+        # Set the goal position
+        self.goal_pose.position.x = x if x is not None else self.pose.position.x
+        self.goal_pose.position.y = y if y is not None else self.pose.position.y
+        self.goal_pose.position.z = z if z is not None else self.pose.position.z
 
-        #if new position on axis is provided use it, otherwise just keep current one
-        self.goal_pose.position.x = x if x != None else self.pose.position.x
-        self.goal_pose.position.y = y if y != None else self.pose.position.y
-        self.goal_pose.position.z = z if z != None else self.pose.position.z
-
-        #if new yaw was given, use it. Otherwise keep the vehicles current yaw
-        if yaw != None:
+        # Set the goal orientation
+        if yaw is not None:
             quat = tf.transformations.quaternion_from_euler(0, 0, yaw + HALF_PI)
             self.goal_pose.orientation.x = quat[0]
             self.goal_pose.orientation.y = quat[1]
             self.goal_pose.orientation.z = quat[2]
             self.goal_pose.orientation.w = quat[3]
+            self.publish_pose(pose=self.goal_pose)
+            return True
         else:
-            self.goal_pose.orientation.x = self.pose.orientation.x
-            self.goal_pose.orientation.y = self.pose.orientation.y
-            self.goal_pose.orientation.z = self.pose.orientation.z
-            self.goal_pose.orientation.w = self.pose.orientation.w
+            self.goal_pose.orientation = self.pose.orientation
 
         if self.debug:
             rospy.loginfo(f"[GOTO] Sending goto {self.goal_pose}")
 
-        self.publish_pose(pose=self.goal_pose)
+        # Calculate the initial distance to the goal
+        initial_distance = self.distance_to_goal()
 
-    def wait_position(self, min_distance : float, wait_time : float=0.3) -> None:
-        """
-        Locks code execution while not close enough to goal position
-        """
-        if self.debug:
-            rospy.loginfo(f"[WAIT_POSITION] Locking process until at least {min_distance} meters close")
-            rospy.loginfo(f"[WAIT_POSITION] Current position\n{self.pose}")
-            rospy.loginfo(f"[WAIT_POSITION] goal position\n{self.goal_pose}")
+        # Define a proportional threshold (e.g., 10% of the initial distance)
+        proportional_threshold = initial_distance * 0.9
 
-        distance = self.distance_to_goal()
-        
-        while(distance > min_distance):
+        # Attempt to send the goto command up to max_attempts times
+        for attempt in range(max_attempts):
+            if self.debug:
+                rospy.loginfo(f"[GOTO] Attempt {attempt + 1}/{max_attempts}")
+
+            self.publish_pose(pose=self.goal_pose)
+
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if self.distance_to_goal() < proportional_threshold:
+                    if self.debug:
+                        rospy.loginfo(f"[GOTO] Drone has moved to the goal position")
+                    return True
+                rospy.sleep(0.5)
 
             if self.debug:
-                rospy.loginfo(f"[WAIT_POSITION] Still haven't arrived at position. Current distance is {distance} meters. Waiting for {wait_time} seconds")
+                rospy.loginfo(f"[GOTO] Timeout reached, resending command")
 
-            rospy.sleep(wait_time)
-
-            distance = self.distance_to_goal()
-
-        if self.debug:
-            rospy.loginfo(f"[WAIT_POSITION] Arrived at {self.pose}. Unlocking process")
+        rospy.logwarn(f"[GOTO] Failed to reach the goal position after {max_attempts} attempts")
+        return False
 
     def distance_to_goal(self) -> float:
         """
@@ -200,7 +201,7 @@ class Mav:
         """
         Rotates vehicles yaw. The same as goto but only changes yaw
         """
-        self.goto(yaw=yaw)
+        self.goto(x=self.pose.position.x, y=self.pose.position.y, z=self.pose.position.z, yaw=yaw)
 
 
     def rotate_relative(self, yaw : float) -> None:
