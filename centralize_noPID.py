@@ -261,7 +261,7 @@ while not rospy.is_shutdown():
             print()
 
             # Calcula a altura para descer, a última altura deve ser a final
-            height = INITIAL_HEIGHT - (INITIAL_HEIGHT - FINAL_HEIGHT)/3 * (i+1)
+            height = INITIAL_HEIGHT - (INITIAL_HEIGHT - FINAL_HEIGHT)/REFINE * (i+1)
 
             # Comando de posição
             go_to_local(setpoint_pub, goal_x=x_pos, goal_y=y_pos, goal_z=height, yaw=0, sleep_time=2)
