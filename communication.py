@@ -28,12 +28,13 @@ class Mav:
 
         #SUBSCRIBERS
         if simulation: rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback)
-        else: rospy.Subscriber("/mavros/vision_position/pose", PoseStamped, self.pose_callback)
+        else: rospy.Subscriber("/mavros/vision_pose/pose", PoseStamped, self.pose_callback)
 
         #PUBLISHERS
         self.pos_pub = rospy.Publisher("/mavros/setpoint_position/local", PoseStamped, queue_size=1)
-        self.angle_pub = rospy.Publisher("/mavros/setpoint_raw/local", PositionTarget, queue_size=1)
+        self.raw_pub = rospy.Publisher("/mavros/setpoint_raw/local", PositionTarget, queue_size=1)
         self.vel_pub = rospy.Publisher("/mavros/setpoint_velocity/cmd_vel_unstamped", Twist, queue_size=1)
+        
 
         #SERVICES
         self.mode_serv = rospy.ServiceProxy('/mavros/set_mode', SetMode)
@@ -70,6 +71,21 @@ class Mav:
         twist.angular.z = ang_z
 
         self.vel_pub.publish(twist)
+    
+    def set_vel_relative(self, forward: float = 0.0, sideways: float = 0.0, upward:float = 0.0) -> None:
+
+        res = PositionTarget()
+        res.header.stamp = rospy.Time.now()
+        res.header.frame_id = "base_footprint"
+
+        res.velocity.x = forward
+        res.velocity.y = sideways
+        res.velocity.z = upward
+        res.coordinate_frame = PositionTarget.FRAME_BODY_NED
+        res.type_mask = PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.FORCE |PositionTarget.IGNORE_YAW | PositionTarget.IGNORE_YAW_RATE
+        
+        self.raw_pub.publish(res)
+
 
     def publish_pose(self, pose : Pose) -> None:
         """
@@ -80,7 +96,7 @@ class Mav:
 
         self.pos_pub.publish(stamped)
 
-    def goto(self, x=None, y=None, z=None, yaw=None) -> None:
+    def goto(self, x=None, y=None, z=None, yaw=None, send_time=None) -> None:
         """
         Sends a Pose message and publishes it as a setpoint (assuming vehicle is in guided mode). Yaw is offset by pi/2.
         If movement in a specifit axis is not provided, assumes that you want to keep the vehicles current axial position.
@@ -105,10 +121,20 @@ class Mav:
             self.goal_pose.orientation.z = self.pose.orientation.z
             self.goal_pose.orientation.w = self.pose.orientation.w
 
-        if self.debug:
-            rospy.loginfo(f"[GOTO] Sending goto {self.goal_pose}")
+        if self.debug: rospy.loginfo(f"[GOTO] Sending goto {self.goal_pose}")
 
-        self.publish_pose(pose=self.goal_pose) 
+        if send_time is not None:
+
+            if self.debug: rospy.loginfo(f"[GOTO] Keep sending goto for {send_time} seconds")
+
+            start_time = time()
+            while time() - start_time < send_time:
+                print("stuck")
+                self.publish_pose(pose=self.goal_pose)
+        else:
+            self.publish_pose(pose=self.goal_pose) 
+        rospy.loginfo(f"[GOTO] Finished")
+
 
     def distance_to_goal(self) -> float:
         """
@@ -170,7 +196,7 @@ class Mav:
         angle.position.z = self.pose.position.z
         angle.type_mask = PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY | PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ
         
-        self.angle_pub.publish(angle)
+        self.raw_pub.publish(angle)
 
         if self.debug: rospy.loginfo(f"[ROTATE] Rotating to {yaw} rad, with a rate of {yaw_rate} rad/2")
 
