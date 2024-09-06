@@ -57,5 +57,6 @@ class PrecisionLanding:
                 print('Vehicle in LAND mode')
 
             self.send_land_message(x_ang, y_ang, dist)
+            self.send_land_message(x_ang, y_ang, dist)
 
             print(f'MARKER POSITION: x_ang = {round(x_ang, 2)} | y_ang = {round(y_ang, 2)} | z = {self.pose.z}')
