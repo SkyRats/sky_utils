@@ -129,7 +129,6 @@ class Mav:
 
             start_time = time()
             while time() - start_time < send_time:
-                print("stuck")
                 self.publish_pose(pose=self.goal_pose)
         else:
             self.publish_pose(pose=self.goal_pose) 
