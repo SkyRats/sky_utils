@@ -232,8 +232,14 @@ class Mav:
         """
         Changes vehicle mode to guided, arms throttle and takes off
         """
+        prev_pose = self.pose
+        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
+                                                            self.pose.orientation.z, self.pose.orientation.w])[2]
 
-        return self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
+        res = self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height) 
+        rospy.sleep(10)
+        self.goto(x = prev_pose.position.x, y = prev_pose.position.y, z = height, yaw=yaw_current, send_time=10)
+        return res 
 
     def change_mode(self, mode : str) -> bool:
         """
