@@ -270,14 +270,13 @@ class TwoAxisPID:
         Updates both PID controllers with an error considering a delta time since the start of the iteration
         """
         return (self.pid_x(error_x), self.pid_y(error_y))
-
+    
     def refesh(self) -> None:
         """
         Resets the PID controllers
         """
         self.pid_x.reset()
         self.pid_y.reset()
-
 def test():
     mav = Mav(debug=True)
 
