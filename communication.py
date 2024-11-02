@@ -1,8 +1,8 @@
 import rospy
 import tf
-from geometry_msgs.msg import Pose, Point, PoseStamped, Twist 
+from geometry_msgs.msg import Pose, Point, PoseStamped, Twist
 from mavros_msgs.srv import SetMode, CommandTOL, CommandBool
-from mavros_msgs.msg import PositionTarget 
+from mavros_msgs.msg import PositionTarget
 from simple_pid import PID
 import math
 import numpy as np
@@ -18,7 +18,7 @@ class Mav:
     """
 
     def __init__(self, debug : bool = False, simulation: bool = False, lidar_min: float = 0.3) -> None:
-        
+
         #INITIALIZING NODE
         rospy.init_node("mav")
         self.simulation = simulation
@@ -34,7 +34,7 @@ class Mav:
         self.pos_pub = rospy.Publisher("/mavros/setpoint_position/local", PoseStamped, queue_size=1)
         self.raw_pub = rospy.Publisher("/mavros/setpoint_raw/local", PositionTarget, queue_size=1)
         self.vel_pub = rospy.Publisher("/mavros/setpoint_velocity/cmd_vel_unstamped", Twist, queue_size=1)
-        
+
 
         #SERVICES
         self.mode_serv = rospy.ServiceProxy('/mavros/set_mode', SetMode)
@@ -71,7 +71,7 @@ class Mav:
         twist.angular.z = ang_z
 
         self.vel_pub.publish(twist)
-    
+
     def set_vel_relative(self, forward: float = 0.0, sideways: float = 0.0, upward:float = 0.0) -> None:
 
         res = PositionTarget()
@@ -83,7 +83,7 @@ class Mav:
         res.velocity.z = upward
         res.coordinate_frame = PositionTarget.FRAME_BODY_NED
         res.type_mask = PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.FORCE |PositionTarget.IGNORE_YAW | PositionTarget.IGNORE_YAW_RATE
-        
+
         self.raw_pub.publish(res)
 
 
@@ -102,7 +102,7 @@ class Mav:
         If movement in a specifit axis is not provided, assumes that you want to keep the vehicles current axial position.
         Updates the self.goal_pose variable as well
         """
-       
+
         #if new position on axis is provided use it, otherwise just keep current one
         self.goal_pose.position.x = x if x != None else self.pose.position.x
         self.goal_pose.position.y = y if y != None else self.pose.position.y
@@ -131,7 +131,7 @@ class Mav:
             while time() - start_time < send_time:
                 self.publish_pose(pose=self.goal_pose)
         else:
-            self.publish_pose(pose=self.goal_pose) 
+            self.publish_pose(pose=self.goal_pose)
         rospy.loginfo(f"[GOTO] Finished")
 
 
@@ -144,7 +144,7 @@ class Mav:
         dz = self.goal_pose.position.z - self.pose.position.z
 
         return math.sqrt((dx * dx) + (dy * dy) + (dz * dz))
-    
+
     def wait_angle(self, min_angle : float, wait_time : float =0.3):
         """
         Locks code execution while not close enough to goal_angle
@@ -153,7 +153,7 @@ class Mav:
             rospy.loginfo(f"[WAIT_ANGLE] Checking current and goal position and locking process until at least {min_angle} meters close")
 
         angle = self.angle_to_goal()
-        
+
         while(angle > min_angle):
 
             if self.debug:
@@ -165,17 +165,17 @@ class Mav:
 
         if self.debug:
             rospy.loginfo(f"[WAIT_ANGLE] Arrived at {self.pose.orientation}. Unlocking process")
-        
+
     def angle_to_goal(self) -> float:
         """
         Calculates the difference between goal yaw and current yaw
         """
-        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
+        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y,
                                                             self.pose.orientation.z, self.pose.orientation.w])[2]
 
-        yaw_goal = tf.transformations.euler_from_quaternion([self.goal_pose.orientation.x, self.goal_pose.orientation.y, 
+        yaw_goal = tf.transformations.euler_from_quaternion([self.goal_pose.orientation.x, self.goal_pose.orientation.y,
                                                             self.goal_pose.orientation.z, self.goal_pose.orientation.w])[2]
-        
+
         return yaw_goal - yaw_current
 
     def rotate_control_yaw(self, yaw : float, yaw_rate: float = 0.5) -> None:
@@ -194,7 +194,7 @@ class Mav:
         angle.position.y = self.pose.position.y
         angle.position.z = self.pose.position.z
         angle.type_mask = PositionTarget.IGNORE_VX | PositionTarget.IGNORE_VY | PositionTarget.IGNORE_VZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ
-        
+
         self.raw_pub.publish(angle)
 
         if self.debug: rospy.loginfo(f"[ROTATE] Rotating to {yaw} rad, with a rate of {yaw_rate} rad/2")
@@ -208,10 +208,10 @@ class Mav:
 
     def rotate_relative(self, yaw : float) -> None:
         """
-        Rotates vehicles yaw in relative of its current position. Using the rotate method 
+        Rotates vehicles yaw in relative of its current position. Using the rotate method
         """
 
-        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
+        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y,
                                                             self.pose.orientation.z, self.pose.orientation.w])[2]
 
         self.rotate(yaw=(yaw_current + yaw - HALF_PI))
@@ -233,13 +233,13 @@ class Mav:
         Changes vehicle mode to guided, arms throttle and takes off
         """
         prev_pose = self.pose
-        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y, 
+        yaw_current = tf.transformations.euler_from_quaternion([self.pose.orientation.x, self.pose.orientation.y,
                                                             self.pose.orientation.z, self.pose.orientation.w])[2]
 
-        res = self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height) 
+        res = self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
         rospy.sleep(10)
-        self.goto(x = prev_pose.position.x, y = prev_pose.position.y, z = height, yaw=yaw_current, send_time=10)
-        return res 
+        self.goto(x = prev_pose.position.x, y = prev_pose.position.y, z = height, yaw=yaw_current - HALF_PI, send_time=2)
+        return res
 
     def change_mode(self, mode : str) -> bool:
         """
@@ -255,14 +255,14 @@ class Mav:
         Sets mode to land and disarms drone.
         """
         return self.change_mode("9") and self.disarm()
-    
+
 class TwoAxisPID:
     """
     Simply put, this is a PID in two axis. Used in centralizing tasks.
     """
 
     def __init__(self, Kp_x : float, Ki_x : float, Kd_x : float, Kp_y : float, Ki_y : float, Kd_y : float, setpoint_x: float, setpoint_y: float) -> None:
-        self.pid_x = PID(Kp_x, Ki_x, Kd_x, setpoint=setpoint_x)
+        self.pid_x = PID(Kp_x, Ki_x, Kd_x, setpoint = setpoint_x)
         self.pid_y = PID(Kp_y, Ki_y, Kd_y, setpoint = setpoint_y)
 
     def update(self, error_x: float, error_y : float) -> tuple:
@@ -270,7 +270,7 @@ class TwoAxisPID:
         Updates both PID controllers with an error considering a delta time since the start of the iteration
         """
         return (self.pid_x(error_x), self.pid_y(error_y))
-    
+
     def refesh(self) -> None:
         """
         Resets the PID controllers
@@ -290,7 +290,7 @@ def test():
 
     mav.goto(x=2)
     mav.wait_position(0.15)
-    
+
     mav.rotate(np.pi)
     mav.wait_angle(np.pi/9)
 
