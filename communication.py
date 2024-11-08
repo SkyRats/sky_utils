@@ -235,8 +235,9 @@ class Mav:
         prev_pose = self.pose
 
         res = self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
-        rospy.sleep(7)
+        rospy.sleep(3)
         self.goto(x = prev_pose.position.x, y = prev_pose.position.y, z = height, yaw=0, send_time=5)
+        rospy.sleep(3)
         return res
 
     def change_mode(self, mode : str) -> bool:
