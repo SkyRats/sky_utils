@@ -48,6 +48,16 @@ class Mav:
         self.mode = int()
 
         #rospy.spin()
+    
+    def in_between(self, check, center, margin):
+        """
+        This function checks if a number is in certain interval of other number
+
+        check: number to be compared
+        center: reference number
+        margin: maximum interval allowed
+        """
+        return (check <= center + margin and check >= center - margin)
 
     def pose_callback(self, msg : PoseStamped) -> None:
         """
@@ -232,12 +242,17 @@ class Mav:
         """
         Changes vehicle mode to guided, arms throttle and takes off
         """
+
+        if self.in_between(self.pose.position.z, height, 0.1): return True
+
         prev_pose = self.pose
 
         res = self.change_mode("4") and self.arm() and self.takeoff_serv(altitude = height)
         rospy.sleep(3)
         self.goto(x = prev_pose.position.x, y = prev_pose.position.y, z = height, yaw=0, send_time=5)
         rospy.sleep(3)
+
+        if self.pose.position.z < height: return False
         return res
 
     def change_mode(self, mode : str) -> bool:
