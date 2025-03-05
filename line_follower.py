@@ -3,29 +3,26 @@
 import rospy
 import numpy as np
 import tf.transformations as tf
-from sensor_msgs.msg import Image
-from geometry_msgs.msg import Point, TwistStamped, Vector3, PoseStamped
-from std_msgs.msg import Float64, Bool, String
+from geometry_msgs.msg import Point, Twist, PoseStamped
+from std_msgs.msg import String
 from mavros_msgs.msg import PositionTarget
 
 
 
 class LineFollower:
-    def __init__(self, debug=False, desired_drone_position=0.0, desired_angle = 0.0, default_velocity=0.25) -> None:    
+    def __init__(self, debug=False, default_velocity=0.25, kp_angle=0.5, kp_x = 0.5, kd_x = 0.25, ki_x = 0.1) -> None:    
         #attributes
         self.debug = debug
-        self.y_error = Float64()
-        self.angle_error = Float64()
-        self.line_detected = Bool()
-        self.desired_drone_position = Float64()
-        self.desired_angle = Float64()
-        self.setpoint = PositionTarget()
-        self.velocity_setpoint = Vector3()
         self.default_velocity = default_velocity
         self.current_yaw = 0.0
-        
-        self.desired_drone_position.data = desired_drone_position
-        self.desired_angle.data = desired_angle 
+
+        # PID constants
+        self.kp_drone = kp_x
+        self.kd_drone = kd_x
+        self.ki_drone = ki_x
+        self.kp_angle = kp_angle
+        self.last_drone_error = 0.0
+        self.sum_drone_error = 0.0
 
 
         # ROS node
@@ -35,75 +32,45 @@ class LineFollower:
         
         # Subscribers
         rospy.Subscriber('/sky_vision/down_cam/line/pose', Point, self.line_pose_callback)
-        rospy.Subscriber('/drone/control_effort', Float64, self.drone_ajustment_callback)
-        rospy.Subscriber('/angle/control_effort', Float64, self.angle_ajustment_callback)
         rospy.Subscriber('/mavros/local_position/pose', PoseStamped, self.drone_pose_callback)
 
         if self.debug:
             rospy.loginfo("Subscribers initialized")
 
         # Publishers
-        self.setpoint_drone_pub = rospy.Publisher('/drone/setpoint', Float64, queue_size=10)
-        self.current_drone_pub = rospy.Publisher('/drone/state', Float64, queue_size=10)
-        self.setpoint_angle_pub = rospy.Publisher('/angle/setpoint', Float64, queue_size=10)
-        self.current_angle_pub = rospy.Publisher('/angle/state', Float64, queue_size=10)
-        self.setpoint_pub = rospy.Publisher('/mavros/setpoint_raw/local', PositionTarget, queue_size=10)
+        self.setpoint_yaw_pub = rospy.Publisher('/mavros/setpoint_position/local', PoseStamped, queue_size=10)
+        self.setpoint_velocity_pub = rospy.Publisher('/mavros/setpoint_velocity/cmd_vel_unstamped', Twist, queue_size=10)
         self.type_pub = rospy.Publisher('/sky_vision/down_cam/type', String, queue_size=10)
 
         if self.debug:
             rospy.loginfo("Publishers initialized")
+
+    def deg2rad(self, deg: float) -> float:
+        return deg*np.pi/180
         
     def drone_pose_callback(self, msg) -> None:
         _,_,self.current_yaw = tf.euler_from_quaternion([msg.pose.orientation.x, msg.pose.orientation.y, msg.pose.orientation.z, msg.pose.orientation.w])
-        if self.debug:
-            rospy.loginfo(f"yaw: {self.current_yaw}")
     
     def line_pose_callback(self, msg) -> None:
-        self.drone_error = msg.x
-        self.angle_error = msg.y
-        self.line_detected = msg.z
-        if self.debug:
-            rospy.loginfo(f"Line detected: {self.line_detected}, Y error: {self.y_error}, Angle error: {self.angle_error}")
+        drone_error = msg.x
+        angle_error = self.deg2rad(msg.y)    
+        line_detected = msg.z
 
-        # send setpoint
-        self.setpoint_drone_pub.publish(self.desired_drone_position)
-        self.setpoint_angle_pub.publish(self.desired_angle)
+        if line_detected: 
+            angle_error = abs(angle_error) - np.pi/2 if angle_error < 0 else np.pi/2 - angle_error  
+            self.publish_setpoint(angle_error, drone_error)
+ 
+    def publish_setpoint(self, yaw_error: float, drone_error: float) -> None:
+        msg = Twist() # uses local frame
+        msg.linear.x= -np.round((self.kp_drone * drone_error) + ((drone_error - self.last_drone_error)*self.kd_drone) + (self.sum_drone_error * self.ki_drone), 3)
+        msg.linear.y = -self.default_velocity
+        msg.angular.z = np.round(self.kp_angle * yaw_error, 3)
 
-        # send current state
-        self.current_drone_pub.publish(self.drone_error)
-        self.current_angle_pub.publish(self.angle_error)
+        self.last_drone_error = drone_error
+        self.sum_drone_error += drone_error
 
-    def drone_ajustment_callback(self, msg) -> None:
-        if self.debug:
-            rospy.loginfo("Drone ajustment callback")
-        self.velocity_setpoint.x = 0 
-        self.velocity_setpoint.y = 0 
-        self.velocity_setpoint.z = 0
-
-        self.setpoint.velocity = self.velocity_setpoint
-
-    
-    def angle_ajustment_callback(self, msg) -> None:
-        if self.debug:
-            rospy.loginfo(f"Angle ajustment callback, angle: {msg.data}")
-
-        self.setpoint.yaw =  (-msg.data + self.current_yaw) #angle in radians
-
-        #rospy.loginfo(f"curr_yar:{self.current_yaw} | yaw:{self.setpoint.yaw} | msg.data:{msg.data}")
-
-        #if abs(msg.data ) > 0.002: 
-        self.publish_setpoint()
-
-    def publish_setpoint(self) -> None:
-        self.setpoint.header.stamp = rospy.Time.now()
-        self.setpoint.header.frame_id = "base_footprint"
-        self.setpoint.type_mask = PositionTarget.IGNORE_PX | PositionTarget.IGNORE_PY | PositionTarget.IGNORE_PZ | PositionTarget.IGNORE_AFX | PositionTarget.IGNORE_AFY | PositionTarget.IGNORE_AFZ | PositionTarget.IGNORE_YAW_RATE
-        self.setpoint.coordinate_frame = PositionTarget.FRAME_BODY_NED
-
-        if self.debug:
-            rospy.logwarn("Publishing setpoint")
-            rospy.loginfo(f"velocity: x: {self.setpoint.velocity.x}, y ={self.setpoint.velocity.y} | yaw: {self.setpoint.yaw * 180 / np.pi} degrees")
-        self.setpoint_pub.publish(self.setpoint) 
+        self.setpoint_velocity_pub.publish(msg) 
+        rospy.sleep(0.1)
 
     def start_following(self, val) -> None:
         msg = String()
@@ -112,16 +79,14 @@ class LineFollower:
         
 
 def main():
-    follower = LineFollower(debug=True)
-    rate = rospy.Rate(0.0001)
+    follower = LineFollower(debug=True, default_velocity=0.1, kp_angle=0.55, kp_x=0.6, kd_x=0.1, ki_x=0.015)
+    rate = rospy.Rate(1)
     while not rospy.is_shutdown(): 
         try:
             follower.start_following(True)
             rate.sleep()
         except rospy.ROSInterruptException:
             pass
-
-    #rospy.spin()
 
 if __name__ == '__main__':
     main()
