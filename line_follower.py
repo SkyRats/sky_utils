@@ -62,8 +62,8 @@ class LineFollower:
  
     def publish_setpoint(self, yaw_error: float, drone_error: float) -> None:
         msg = Twist() # uses local frame
-        msg.linear.x= -np.round((self.kp_drone * drone_error) + ((drone_error - self.last_drone_error)*self.kd_drone) + (self.sum_drone_error * self.ki_drone), 3)
-        msg.linear.y = -self.default_velocity
+        msg.linear.x= np.round((self.kp_drone * drone_error) + ((drone_error - self.last_drone_error)*self.kd_drone) + (self.sum_drone_error * self.ki_drone), 3)
+        msg.linear.y = self.default_velocity
         msg.angular.z = np.round(self.kp_angle * yaw_error, 3)
 
         self.last_drone_error = drone_error
@@ -79,7 +79,7 @@ class LineFollower:
         
 
 def main():
-    follower = LineFollower(debug=True, default_velocity=0.1, kp_angle=0.55, kp_x=0.6, kd_x=0.1, ki_x=0.015)
+    follower = LineFollower(debug=True, default_velocity=0.1, kp_angle=0.6, kp_x=0.4, kd_x=0.1, ki_x=0.0)
     rate = rospy.Rate(1)
     while not rospy.is_shutdown(): 
         try:
