@@ -17,7 +17,7 @@ class Mav:
     Interface with mavros
     """
 
-    def __init__(self, debug : bool = False, simulation: bool = False, lidar_min: float = 0.3) -> None:
+    def __init__(self, debug : bool = False, simulation: bool = False, lidar_min: float = 0.3, outdoor: bool = False) -> None:
 
         #INITIALIZING NODE
         rospy.init_node("mav")
@@ -27,7 +27,7 @@ class Mav:
         if debug: rospy.loginfo("started mav")
 
         #SUBSCRIBERS
-        if simulation: rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback)
+        if simulation or outdoor: rospy.Subscriber("/mavros/local_position/pose", PoseStamped, self.pose_callback)
         else: rospy.Subscriber("/mavros/vision_pose/pose", PoseStamped, self.pose_callback)
 
         #PUBLISHERS

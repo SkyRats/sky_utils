@@ -11,10 +11,10 @@ from pymavlink import mavutil
 
 class PrecLand:
 
-    def __init__(self, detector, simulation, capture=None):
+    def __init__(self, detector, simulation):
         self.simulation = simulation
         parser = argparse.ArgumentParser()
-        parser.add_argument('--connect', default='tcp:127.0.0.1:5763' if simulation else '/dev/ttyACM0')
+        parser.add_argument('--connect', default='tcp:127.0.0.1:5763' if simulation else 'tcp:127.0.0.1:5763')
         args = parser.parse_args()
         self.do_plnd = False
 
@@ -42,15 +42,6 @@ class PrecLand:
         self.landed = False
         self.detector = detector
 
-        if simulation:
-            self.bridge = CvBridge()
-            rospy.Subscriber("/sky_vision/down_cam/img_raw", Image, self.msg_receiver)
-        else:
-            if capture:
-                self.cam = capture
-            else:
-                raise ValueError("Capture device required for real-world mode.")
-
     def send_land_message(self, x_ang, y_ang, dist_m):
         msg = self.vehicle.message_factory.landing_target_encode(
             0, 0, mavutil.mavlink.MAV_FRAME_BODY_FRD, x_ang, y_ang, dist_m, 0, 0
@@ -66,9 +57,9 @@ class PrecLand:
                 rospy.sleep(0.1)  # Allow time for mode switch
             print("Switched to LAND mode.")
 
-    def process_frame(self, frame):
+    def process_frame(self):
         """Process a frame, detect target, and send landing commands."""
-        closest_target = self.detector.detect(frame)
+        closest_target = self.detector.detect()
         if closest_target:
             x, y, z, x_ang, y_ang, payload, draw_img = closest_target
             if self.vehicle.location.global_relative_frame.alt > 0.1:
@@ -82,24 +73,15 @@ class PrecLand:
                 print("Finishing landing.")
                 self.landed = True
 
-    def msg_receiver(self, message):
-        """Callback function for ROS image messages."""
-        if self.do_plnd and not self.landed:
-            frame = self.bridge.imgmsg_to_cv2(message, "bgr8")
-            self.process_frame(frame)
-
     def main_loop(self):
         """Main loop for real-world execution."""
         while self.vehicle.armed and not self.landed:
-            frame = self.cam.read()[1]
-            self.process_frame(frame)
+            self.process_frame()
 
     def start(self):
         """Entry point to start the process."""
         if not self.landed:
-            if not self.simulation:
                 self.main_loop()
-            else:
                 self.do_plnd = True
 
     def reset(self):
