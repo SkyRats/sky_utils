@@ -8,13 +8,15 @@ from std_msgs.msg import String
 from mavros_msgs.msg import PositionTarget
 
 
-
 class LineFollower:
-    def __init__(self, debug=False, default_velocity=0.25, kp_angle=0.5, kp_x = 0.5, kd_x = 0.25, ki_x = 0.1) -> None:    
+    def __init__(self, debug=False, default_velocity=0.25, kp_angle=0.5, kp_x = 0.5, kd_x = 0.25, ki_x = 0.1, mav = None) -> None:    
         #attributes
         self.debug = debug
         self.default_velocity = default_velocity
         self.current_yaw = 0.0
+        
+        # if using dronekit, pass mav object
+        self.mav = mav
 
         # PID constants
         self.kp_drone = kp_x
@@ -26,7 +28,6 @@ class LineFollower:
 
 
         # ROS node
-        rospy.init_node('line_follower')
         if self.debug:
             rospy.loginfo("Line follower node started")
         
@@ -58,8 +59,23 @@ class LineFollower:
 
         if line_detected: 
             angle_error = abs(angle_error) - np.pi/2 if angle_error < 0 else np.pi/2 - angle_error  
-            self.publish_setpoint(angle_error, drone_error)
- 
+            if self.mav is None: 
+                self.publish_setpoint(angle_error, drone_error)
+            else:
+                self.setpoint_velocity(angle_error, drone_error)
+
+    def setpoint_velocity(self, yaw_error: float, drone_error: float) -> None:
+        msg = Twist() # uses local frame
+        msg.linear.x= np.round((self.kp_drone * drone_error) + ((drone_error - self.last_drone_error)*self.kd_drone) + (self.sum_drone_error * self.ki_drone), 3)
+        msg.linear.y = self.default_velocity
+        msg.angular.z = np.round(self.kp_angle * yaw_error, 3)
+
+        self.last_drone_error = drone_error
+        self.sum_drone_error += drone_error
+
+        self.mav.set_vel(msg.linear.x, msg.linear.y, 0)  # Assuming mav has a set_vel method
+        self.mav.send_yaw_rate(msg.angular.z)  # Assuming mav has a set_vel method
+
     def publish_setpoint(self, yaw_error: float, drone_error: float) -> None:
         msg = Twist() # uses local frame
         msg.linear.x= np.round((self.kp_drone * drone_error) + ((drone_error - self.last_drone_error)*self.kd_drone) + (self.sum_drone_error * self.ki_drone), 3)
